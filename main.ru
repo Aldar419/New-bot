@@ -1,32 +1,22 @@
 import os
-from aiogram import Bot, Dispatcher, types
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
-from aiogram.fsm.state import StatesGroup, State
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.storage.memory import MemoryStorage
 import asyncio
+from aiogram import Bot, Dispatcher, types
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import StatesGroup, State
+from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
 
-bot = Bot(token=BOT_TOKEN)
+bot = Bot(BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
 
 # ---------- СОСТОЯНИЯ ----------
-class Sale(StatesGroup):
+class Form(StatesGroup):
     description = State()
     photos = State()
-    price = State()
-
-
-class Help(StatesGroup):
-    description = State()
-    price = State()
-
-
-class Service(StatesGroup):
-    description = State()
     price = State()
 
 
@@ -41,115 +31,67 @@ menu = ReplyKeyboardMarkup(
 )
 
 
-# ---------- START ----------
 @dp.message(commands=["start"])
-async def start(message: types.Message):
+async def start(message: types.Message, state: FSMContext):
+    await state.clear()
+    await message.answer("Выберите вариант:", reply_markup=menu)
+
+
+# ---------- ОБЩИЙ СТАРТ ----------
+@dp.message(lambda m: m.text in ["Продажа вещи", "Помощь", "Предложение услуги"])
+async def start_form(message: types.Message, state: FSMContext):
+    await state.update_data(type=message.text, photos=[])
+    await state.set_state(Form.description)
+    await message.answer("Введите описание:")
+
+
+@dp.message(Form.description)
+async def get_description(message: types.Message, state: FSMContext):
+    await state.update_data(description=message.text)
+    await state.set_state(Form.photos)
     await message.answer(
-        "Выберите нужный пункт:",
-        reply_markup=menu
+        "Отправьте фото (если есть).\n"
+        "Когда закончите — напишите «Готово».\n"
+        "Если фото нет — сразу напишите «Готово»."
     )
 
 
-# ---------- ПРОДАЖА ----------
-@dp.message(lambda m: m.text == "Продажа вещи")
-async def sale_start(message: types.Message, state: FSMContext):
-    await state.set_state(Sale.description)
-    await message.answer("Опишите вещь:")
-
-
-@dp.message(Sale.description)
-async def sale_desc(message: types.Message, state: FSMContext):
-    await state.update_data(description=message.text)
-    await state.set_state(Sale.photos)
-    await message.answer("Отправьте фото товара (можно несколько). Когда закончите — напишите 'Готово'")
-
-
-@dp.message(Sale.photos)
-async def sale_photos(message: types.Message, state: FSMContext):
+@dp.message(Form.photos)
+async def get_photos(message: types.Message, state: FSMContext):
     data = await state.get_data()
-    photos = data.get("photos", [])
 
     if message.photo:
-        photos.append(message.photo[-1].file_id)
-        await state.update_data(photos=photos)
-    elif message.text.lower() == "готово":
-        await state.set_state(Sale.price)
+        data["photos"].append(message.photo[-1].file_id)
+        await state.update_data(photos=data["photos"])
+        return
+
+    if message.text and message.text.lower() == "готово":
+        await state.set_state(Form.price)
         await message.answer("Укажите цену:")
+        return
+
+    await message.answer("Пожалуйста, отправьте фото или напишите «Готово».")
 
 
-@dp.message(Sale.price)
-async def sale_price(message: types.Message, state: FSMContext):
+@dp.message(Form.price)
+async def get_price(message: types.Message, state: FSMContext):
     data = await state.get_data()
 
     text = (
-        "🛒 *Продажа вещи*\n\n"
-        f"📄 Описание: {data['description']}\n"
-        f"💰 Цена: {message.text}"
+        f"📩 *Новая заявка*\n\n"
+        f"📌 Тип: {data['type']}\n"
+        f"📝 Описание: {data['description']}\n"
+        f"💰 Цена: {message.text}\n"
+        f"👤 От: @{message.from_user.username or message.from_user.id}"
     )
 
     await bot.send_message(ADMIN_ID, text, parse_mode="Markdown")
 
-    for photo in data.get("photos", []):
+    for photo in data["photos"]:
         await bot.send_photo(ADMIN_ID, photo)
 
     await state.clear()
-    await message.answer("Заявка отправлена админу ✅", reply_markup=menu)
-
-
-# ---------- ПОМОЩЬ ----------
-@dp.message(lambda m: m.text == "Помощь")
-async def help_start(message: types.Message, state: FSMContext):
-    await state.set_state(Help.description)
-    await message.answer("Опишите, какая помощь нужна:")
-
-
-@dp.message(Help.description)
-async def help_desc(message: types.Message, state: FSMContext):
-    await state.update_data(description=message.text)
-    await state.set_state(Help.price)
-    await message.answer("Укажите цену:")
-
-
-@dp.message(Help.price)
-async def help_price(message: types.Message, state: FSMContext):
-    data = await state.get_data()
-
-    await bot.send_message(
-        ADMIN_ID,
-        f"🆘 *Помощь*\n\n📄 {data['description']}\n💰 {message.text}",
-        parse_mode="Markdown"
-    )
-
-    await state.clear()
-    await message.answer("Заявка отправлена админу ✅", reply_markup=menu)
-
-
-# ---------- УСЛУГИ ----------
-@dp.message(lambda m: m.text == "Предложение услуги")
-async def service_start(message: types.Message, state: FSMContext):
-    await state.set_state(Service.description)
-    await message.answer("Опишите услугу:")
-
-
-@dp.message(Service.description)
-async def service_desc(message: types.Message, state: FSMContext):
-    await state.update_data(description=message.text)
-    await state.set_state(Service.price)
-    await message.answer("Укажите цену:")
-
-
-@dp.message(Service.price)
-async def service_price(message: types.Message, state: FSMContext):
-    data = await state.get_data()
-
-    await bot.send_message(
-      ADMIN_ID,
-        f"🛠 *Услуга*\n\n📄 {data['description']}\n💰 {message.text}",
-        parse_mode="Markdown"
-    )
-
-    await state.clear()
-    await message.answer("Заявка отправлена админу ✅", reply_markup=menu)
+    await message.answer("✅ Заявка отправлена администратору", reply_markup=menu)
 
 
 # ---------- ЗАПУСК ----------
